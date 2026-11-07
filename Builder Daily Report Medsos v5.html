@@ -1,6 +1,6 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Daily Report Generator v3 · PLN Media Monitoring</title>
+<title>Daily Report Generator v5 · PLN Media Monitoring</title>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/exceljs/4.4.0/exceljs.min.js"></script>
 <link rel="preconnect" href="https://fonts.googleapis.com">
@@ -135,6 +135,7 @@ button.dl{background:linear-gradient(135deg,#0d9488,#10B981);box-shadow:0 8px 18
 .mdl:hover:not(:disabled){background:var(--brand);color:#fff}
 .mdl:disabled{opacity:.4;cursor:default}
 .mwrap{overflow-x:auto}
+.mopt{display:flex;align-items:center;gap:7px;font-size:12.5px;color:var(--mut);margin-top:12px;cursor:pointer;width:fit-content}
 .mcomb{display:flex;flex-wrap:wrap;gap:10px;align-items:center;margin-top:14px;font-size:12.5px;color:var(--mut)}
 </style>
 
@@ -143,7 +144,7 @@ button.dl{background:linear-gradient(135deg,#0d9488,#10B981);box-shadow:0 8px 18
 <div class="wrap">
   <header class="dash-head">
     <div>
-      <h1>Daily Report Generator <span class="vtag">v3</span></h1>
+      <h1>Daily Report Generator <span class="vtag">v5</span></h1>
       <div class="dh-sub">PT PLN (Persero) · Social Media Monitoring</div>
     </div>
     <nav class="pipeline" id="pipeline">
@@ -220,6 +221,7 @@ button.dl{background:linear-gradient(135deg,#0d9488,#10B981);box-shadow:0 8px 18
     <div class="qtabs">
       <button class="dtab active" data-d="single">Single file</button>
       <button class="dtab" data-d="multi">Across files (new data only)</button>
+      <button class="dtab" data-d="compile">Compile files</button>
     </div>
     <div id="ddSingle">
     <label class="drop" for="fDedup">
@@ -272,6 +274,35 @@ button.dl{background:linear-gradient(135deg,#0d9488,#10B981);box-shadow:0 8px 18
         <div class="mcomb" id="mComb" hidden>
           <button class="mdl" id="btnMultiAll">Download semua data baru (1 file)</button>
           <span id="mCombLab"></span>
+        </div>
+      </div>
+    </div>
+
+    <div id="ddCompile" hidden>
+      <p class="mhint">Gabungkan beberapa file jadi satu, sekaligus buang baris yang dobel. Kolom dicocokkan berdasarkan nama header. Kalau ada baris yang sama di beberapa file, yang disimpan adalah kemunculan pertama sesuai urutan di bawah.</p>
+      <label class="drop" for="fComp">
+        <span class="ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 6h16M4 12h16M4 18h16"/></svg></span>
+        <span class="txt" id="lComp"><b>Drop files or browse</b><span>.xlsx &middot; .csv &middot; pilih beberapa sekaligus</span></span>
+      </label>
+      <input type="file" id="fComp" accept=".xlsx,.xls,.csv" multiple hidden>
+      <div class="mlist" id="cList"></div>
+      <label class="mopt"><input type="checkbox" id="cSrc"> Tambah kolom "Source File"</label>
+      <div class="run" style="margin-top:14px">
+        <button class="go" id="btnComp" disabled><svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" stroke-width="2.4"><path d="M5 3l14 9-14 9V3Z"/></svg> Compile &amp; Dedup</button>
+        <button class="mdl" id="btnCompClear" hidden>Clear all</button>
+        <span class="runstat" id="compstat">Upload minimal 2 file.</span>
+      </div>
+      <div class="err" id="compErr"></div>
+      <div id="compRes" hidden>
+        <div class="mwrap">
+          <table class="mtable">
+            <thead><tr><th>File</th><th class="n">Rows</th><th class="n">Dobel dibuang</th><th class="n">Masuk compile</th></tr></thead>
+            <tbody id="cBody"></tbody>
+          </table>
+        </div>
+        <div class="mcomb">
+          <button class="mdl" id="btnCompDl">Download compiled file</button>
+          <span id="cLab"></span>
         </div>
       </div>
     </div>
@@ -757,6 +788,7 @@ document.querySelectorAll(".dtab").forEach(b=>b.addEventListener("click",()=>{
   document.querySelectorAll(".dtab").forEach(x=>x.classList.toggle("active",x===b));
   $("#ddSingle").hidden=b.dataset.d!=="single";
   $("#ddMulti").hidden=b.dataset.d!=="multi";
+  $("#ddCompile").hidden=b.dataset.d!=="compile";
 }));
 
 /* ---------- Incremental dedup across files ---------- */
@@ -875,4 +907,82 @@ async function downloadRows(H,rows,fname,btn){
   }catch(err){ showMultiErr("Download gagal: "+(err.message||err)); btn.textContent=old; }
   setTimeout(()=>{btn.textContent=old;btn.disabled=false;},2500);
 }
+
+/* ---------- Compile multiple files + dedup ---------- */
+const CP={files:[],H:null,rows:null};
+function showCompErr(m){const e=$("#compErr");e.style.display="block";e.textContent=m;}
+function renderCList(){
+  const box=$("#cList"); box.innerHTML="";
+  CP.files.forEach((f,i)=>{
+    const el=document.createElement("div"); el.className="mfile";
+    const tag=document.createElement("span"); tag.className="mtag"; tag.textContent="#"+(i+1);
+    const nm=document.createElement("div"); nm.className="mname"; nm.textContent=f.name;
+    const sm=document.createElement("small"); sm.textContent=fmtN(f.rows.length)+" rows · "+f.headers.length+" kolom"; nm.appendChild(sm);
+    const act=document.createElement("div"); act.className="mact";
+    const mk=(t,title,dis,fn)=>{const b=document.createElement("button");b.className="mbtn";b.textContent=t;b.title=title;b.disabled=dis;b.addEventListener("click",fn);act.appendChild(b);};
+    mk("↑","Naikkan urutan",i===0,()=>{[CP.files[i-1],CP.files[i]]=[CP.files[i],CP.files[i-1]];resetComp();});
+    mk("↓","Turunkan urutan",i===CP.files.length-1,()=>{[CP.files[i+1],CP.files[i]]=[CP.files[i],CP.files[i+1]];resetComp();});
+    mk("×","Hapus file",false,()=>{CP.files.splice(i,1);resetComp();});
+    el.append(tag,nm,act); box.appendChild(el);
+  });
+  const n=CP.files.length;
+  $("#btnComp").disabled=n<2; $("#btnCompClear").hidden=n===0;
+  $("#compstat").textContent=n<2?`Upload minimal 2 file${n?` · ${n} loaded`:""}.`:`Ready · ${n} files, ${fmtN(CP.files.reduce((a,f)=>a+f.rows.length,0))} rows total.`;
+}
+function resetComp(){ CP.H=null; CP.rows=null; $("#compRes").hidden=true; $("#compErr").style.display="none"; renderCList(); }
+$("#fComp").addEventListener("change",async e=>{
+  const list=[...e.target.files].sort((a,b)=>a.name.localeCompare(b.name,undefined,{numeric:true}));
+  e.target.value=""; if(!list.length) return;
+  $("#compErr").style.display="none";
+  $("#lComp").innerHTML=`<b>Reading ${list.length} file…</b><span>&nbsp;</span>`;
+  for(const file of list){
+    try{
+      const w=loadWorkbook(await file.arrayBuffer());
+      CP.files.push({name:file.name,headers:w.headers,rows:w.aoa.filter(r=>r&&r.some(c=>cellStr(c)!==""))});
+    }catch(err){ showCompErr(`Gagal membaca ${file.name}: ${err.message||err}`); }
+  }
+  $("#lComp").innerHTML=`<b>Add more files</b><span>.xlsx &middot; .csv &middot; urutan bisa diubah di bawah</span>`;
+  resetComp();
+});
+$("#btnCompClear").addEventListener("click",()=>{CP.files=[];resetComp();});
+$("#cSrc").addEventListener("change",()=>{ if(CP.rows) runCompile(); });
+$("#btnComp").addEventListener("click",()=>{ $("#compErr").style.display="none"; try{ runCompile(); }catch(err){ showCompErr("Error: "+(err&&err.message?err.message:err)); } });
+function runCompile(){
+  // union of headers, matched case-insensitively, in first-seen order
+  const H=[], pos=new Map();
+  for(const f of CP.files) for(const h of f.headers){ const k=String(h).trim().toLowerCase(); if(k&&!pos.has(k)){ pos.set(k,H.length); H.push(String(h).trim()); } }
+  const addSrc=$("#cSrc").checked;
+  const iUrl=ddFind(H,["url","link"]), iPlat=ddFind(H,["platform"]), iText=ddFind(H,["text"]);
+  const kf={iUrl,iPlat,iText}; const seen=new Set(), out=[], body=$("#cBody"); body.innerHTML="";
+  let dupTotal=0; const odd=[];
+  for(const f of CP.files){
+    const map=f.headers.map(h=>pos.get(String(h).trim().toLowerCase()));
+    if(f.headers.length!==H.length) odd.push(f.name);
+    let dup=0, add=0;
+    for(const row of f.rows){
+      const r=new Array(H.length).fill("");
+      for(let j=0;j<map.length;j++) if(map[j]!==undefined && cellStr(r[map[j]])==="") r[map[j]]=row[j]==null?"":row[j];
+      const k=rowKey(kf,r);
+      if(seen.has(k)){ dup++; continue; }
+      seen.add(k); if(addSrc) r.push(f.name); out.push(r); add++;
+    }
+    dupTotal+=dup;
+    const tr=document.createElement("tr");
+    [[f.name,""],[fmtN(f.rows.length),"n"],[fmtN(dup),"n"],[fmtN(add),"n new"]].forEach(([t,c])=>{const d=document.createElement("td");if(c)d.className=c;d.textContent=t;tr.appendChild(d);});
+    body.appendChild(tr);
+  }
+  CP.H=addSrc?[...H,"Source File"]:H; CP.rows=out;
+  // renumber a "No" column if present
+  const iNo=CP.H.findIndex(h=>String(h).trim().toLowerCase()==="no");
+  if(iNo>=0) out.forEach((r,i)=>r[iNo]=i+1);
+  const total=CP.files.reduce((a,f)=>a+f.rows.length,0);
+  $("#cLab").textContent=`${fmtN(total)} → ${fmtN(out.length)} rows · ${fmtN(dupTotal)} dobel dibuang`+(iUrl<0?" · kolom Url tidak ada, dedup pakai isi baris":"")+(odd.length?` · jumlah kolom beda di: ${odd.join(", ")}`:"");
+  $("#compRes").hidden=false;
+  $("#compstat").textContent=`Done · ${fmtN(out.length)} rows unik.`;
+}
+$("#btnCompDl").addEventListener("click",e=>{
+  if(!CP.rows){ showCompErr("Jalankan compile dulu."); return; }
+  const d=new Date(),p=x=>String(x).padStart(2,"0");
+  downloadRows(CP.H,CP.rows,`Compiled_${d.getFullYear()}-${p(d.getMonth()+1)}-${p(d.getDate())}.xlsx`,e.currentTarget);
+});
 </script>
